@@ -3,15 +3,18 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { dbResponseEnhancedByGemini } = require('./ai');
 const { queryFunction } = require('./connect');
 require("dotenv").config();
+const cors = require('cors');
 
 const app = express();
 const port = 3000;
+
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cors());
 
 // Helper function to clean SQL query from markdown
 const cleanSqlQuery = (text) => {
@@ -75,7 +78,7 @@ Rules for query generation:
 6. Never include actual values for passwords or sensitive data
 7. Follow proper SQL injection prevention practices
 
-Remember: Provide only the query, nothing else. No explanations, no comments, no additional text.
+Remember: Provide only the query and values if values are needed, nothing else. No explanations, no comments, no additional text.
         `;
 
         // Generate SQL query using Gemini
@@ -97,7 +100,7 @@ Remember: Provide only the query, nothing else. No explanations, no comments, no
                 databaseResponse = await queryFunction(sqlQuery, params || []);
             } catch (dbError) {
                 console.error("Database Error:", dbError);
-                return res.status(500).json({
+                return res.status(200).json({
                     success: false,
                     message: "Database error",
                     error: dbError.message,
