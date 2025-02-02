@@ -18,22 +18,22 @@ connection.connect((err) => {
 });
 
 // Promisify the queryFunction to properly handle async operations
-const queryFunction = (query) => {
+const queryFunction = (queryData) => {
     return new Promise((resolve, reject) => {
-        if (!query) {
-            reject(new Error('No query provided'));
-            return;
+        console.log('Received query data:', queryData);
+        if (!queryData || !queryData.sqlQuery) {
+            return reject(new Error('No query provided'));
         }
 
-        // Log the query for debugging
-        console.log('Executing query:', query);
+        // Log the query and values for debugging
+        console.log('Executing query:', queryData.sqlQuery);
+        console.log('With values:', queryData.values);
 
-        // Execute the query
-        connection.execute(query, [], (error, results) => {
+        // Execute the query using parameterized values
+        connection.execute(queryData.sqlQuery, queryData.values || [], (error, results) => {
             if (error) {
                 console.error('Query execution error:', error);
-                reject(error);
-                return;
+                return reject(error);
             }
             resolve(results);
         });
