@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Cookies from "js-cookie";
 import "./App.css"; // Make sure to add styles for the chat layout
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          token: localStorage.getItem("token"),
         },
         body: JSON.stringify({ query: msg }),
       });
@@ -32,11 +34,18 @@ export default function App() {
 
       const responseData = await res.json();
       console.log(responseData);
+      if (responseData.data.token) {
+        Cookies.set("token", responseData.data.token);
+        localStorage.setItem("token", responseData.data.token);
+      }
 
       // Add response to the chat (rendering HTML)
       setResponses((prevResponses) => [
         ...prevResponses,
-        { sender: "ai", message: responseData.data || responseData.message },
+        {
+          sender: "ai",
+          message: responseData.data.html || responseData.message,
+        },
       ]);
     } catch (error) {
       console.error("Error:", error);
@@ -83,6 +92,7 @@ export default function App() {
             required
           />
           <button
+            type="button"
             onClick={handleUserQuery}
             disabled={loading || !msg.trim()}
             className={loading ? "loading" : ""}

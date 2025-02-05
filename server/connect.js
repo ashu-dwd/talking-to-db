@@ -5,7 +5,7 @@ const connection = mysql.createConnection({
     host: 'localhost',
     user: 'root',
     password: '',
-    database: 'react-project'
+    database: 'cangra'
 });
 
 // Connect and handle initial connection error
@@ -20,7 +20,7 @@ connection.connect((err) => {
 // Promisify the queryFunction to properly handle async operations
 const queryFunction = (queryData) => {
     return new Promise((resolve, reject) => {
-        console.log('Received query data:', queryData);
+        //console.log('Received query data:', queryData);
         if (!queryData || !queryData.sqlQuery) {
             return reject(new Error('No query provided'));
         }

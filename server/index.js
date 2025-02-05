@@ -4,142 +4,185 @@ const { dbResponseEnhancedByGemini } = require('./ai');
 const { queryFunction } = require('./connect');
 require("dotenv").config();
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
-
+// Init Gemini
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
+app.use(cookieParser());
 
-// Helper function to clean SQL query from markdown
-const cleanSqlQuery = (text) => {
-    // Remove markdown code blocks and any extra whitespace
-    return text.replace(/```json\n?|\n?```/g, '').replace(/```javascript\n?|\n?```/g, '').trim();
-};
+const cleanSqlQuery = text => text.replace(/```(json|javascript)?\n?|\n?```/g, '').trim();
 
+const generateMySQLPrompt = (request, loginInfo) => `
+You are a secure MySQL query generator specializing in HR management systems.
 
-//checking if the query is select
-function isSelectQuery(query) {
-    console.log(query);
-    const isSelect = query.sqlQuery.toString().toLowerCase().startsWith('select');
-    console.log(isSelect);
-    if (!isSelect) {
-        return false;
-    }
-    return query;
+DATABASE CONFIGURATION:
+Database Name: country-data
+Server: MariaDB 10.4.32
+Charset: UTF-8 Unicode (utf8mb4)
+
+TABLE SCHEMAS:
+
+1. AUTHENTICATION & USER MANAGEMENT
+\`\`\`sql
+CREATE TABLE employee_login (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    password VARCHAR(50) NOT NULL, 
+    role ENUM('Admin', 'Manager', 'Staff') NOT NULL
+);
+\`\`\`
+
+2. ORGANIZATIONAL STRUCTURE
+\`\`\`sql
+CREATE TABLE regions (
+    region_id INT (11) AUTO_INCREMENT PRIMARY KEY,
+    region_name VARCHAR (25) DEFAULT NULL
+);
+
+CREATE TABLE countries (
+    country_id CHAR (2) PRIMARY KEY,
+    country_name VARCHAR (40) DEFAULT NULL,
+    region_id INT (11) NOT NULL,
+    FOREIGN KEY (region_id) REFERENCES regions (region_id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE locations (
+    location_id INT (11) AUTO_INCREMENT PRIMARY KEY,
+    street_address VARCHAR (40) DEFAULT NULL,
+    postal_code VARCHAR (12) DEFAULT NULL,
+    city VARCHAR (30) NOT NULL,
+    state_province VARCHAR (25) DEFAULT NULL,
+    country_id CHAR (2) NOT NULL,
+    FOREIGN KEY (country_id) REFERENCES countries (country_id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE departments (
+    department_id INT (11) AUTO_INCREMENT PRIMARY KEY,
+    department_name VARCHAR (30) NOT NULL,
+    location_id INT (11) DEFAULT NULL,
+    FOREIGN KEY (location_id) REFERENCES locations (location_id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+\`\`\`
+
+3. EMPLOYMENT & COMPENSATION
+\`\`\`sql
+CREATE TABLE jobs (
+    job_id INT (11) AUTO_INCREMENT PRIMARY KEY,
+    job_title VARCHAR (35) NOT NULL,
+    min_salary DECIMAL (8, 2) DEFAULT NULL,
+    max_salary DECIMAL (8, 2) DEFAULT NULL
+);
+
+CREATE TABLE employees (
+    employee_id INT (11) AUTO_INCREMENT PRIMARY KEY,
+    first_name VARCHAR (20) DEFAULT NULL,
+    last_name VARCHAR (25) NOT NULL,
+    email VARCHAR (100) NOT NULL,
+    phone_number VARCHAR (20) DEFAULT NULL,
+    hire_date DATE NOT NULL,
+    job_id INT (11) NOT NULL,
+    salary DECIMAL (8, 2) NOT NULL,
+    manager_id INT (11) DEFAULT NULL,
+    department_id INT (11) DEFAULT NULL,
+    FOREIGN KEY (job_id) REFERENCES jobs (job_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (department_id) REFERENCES departments (department_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    FOREIGN KEY (manager_id) REFERENCES employees (employee_id)
+);
+
+CREATE TABLE dependents (
+    dependent_id INT (11) AUTO_INCREMENT PRIMARY KEY,
+    first_name VARCHAR (50) NOT NULL,
+    last_name VARCHAR (50) NOT NULL,
+    relationship VARCHAR (25) NOT NULL,
+    employee_id INT (11) NOT NULL,
+    FOREIGN KEY (employee_id) REFERENCES employees (employee_id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+\`\`\`
+
+QUERY TYPES AND HANDLING:
+
+1. LOGIN REQUESTS:
+For requests containing email and password:
+{
+  "sqlQuery": "SELECT id, role FROM employee_login WHERE email = ? AND password = ?",
+  "values": [email, password],
+  "success": true,
+  "message": "Login query generated",
+  "requiresAuth": false
 }
 
+2. DATA REQUESTS:
+For authenticated data queries:
+{
+  "sqlQuery": "SELECT ... FROM ... WHERE ...",
+  "values": [...],
+  "success": true,
+  "message": "Query generated",
+  "requiresAuth": true
+}
 
+CURRENT REQUEST:
+${request}, loginInfo: ${loginInfo}
 
-const sendingTableDataToGemini = async (req, res) => {
-    const { query } = req.body;  // Now expecting both query request and parameters
+Generate a secure MySQL query following these specifications.`;
 
-    if (!query) {
-        return res.status(400).json({
-            success: false,
-            message: "Query request is required"
-        });
-    }
-
+// Main request handler
+const handleDatabaseQuery = async (req, res) => {
     try {
-        const prompt = `You are a MySQL query generator for a blog application with users, posts, and comments. Your responses must strictly follow these rules:
+        const { query } = req.body;
+        if (!query) {
+            return res.status(400).json({ success: false, message: "Query required" });
+        }
 
-Database Schema:
-1. Users Table:
-id (int, auto-increment, primary key)
-username (varchar(255))
-email (varchar(255))
-password (varchar(255))
-createdAt (datetime)
-updatedAt (datetime)
-2. Posts Table:
-id (int, auto-increment, primary key)
-title (varchar(255))
-content (varchar(255))
-username (varchar(255))
-createdAt (datetime)
-updatedAt (datetime)
-3. Comments Table:
-id (int, auto-increment, primary key)
-CommentBody (varchar(255))
-username (varchar(255))
-postId (int)
-createdAt (datetime)
-updatedAt (datetime)
-Rules for Query Generation:
-Respond with the exact MySQL2 query only – No explanations, no extra text, no comments.
-Use proper MySQL2 syntax.
-Use JOIN operations for retrieving related data efficiently.
-Always use prepared statements with ? placeholders for variable binding.
-Never include actual values for sensitive data like passwords.
-Prevent SQL injection risks by structuring queries securely.
-Strictly provide the query and values in a single response – Do not separate them.
-Use current date and time for createdAt and updatedAt fields.Dont add them as variable.
-Your Task:
-Whenever the user requests a MySQL query, respond only with the exact MySQL2 query, following the above rules. Do not add any explanations, greetings, or extra text. Also return an object with the sqlQuery and values. User request is this: ${query}`;
+        // Check auth status
+        const loginInfo = req.cookies.token && req.cookies.token !== 'null'
+            ? "USER is logged in . Good to go!"
+            : "User is not logged in. Ask Him to send login credentials.";
+        console.log(loginInfo);
+        console.log(req.cookies)
 
-        // Generate SQL query using Gemini
-        const result = await model.generateContent(prompt);
+
+        // Generate and clean query
+        const result = await model.generateContent(generateMySQLPrompt(query, loginInfo));
         const aiQuery = cleanSqlQuery(result.response.text());
-        console.log(aiQuery);
         const jsonQuery = JSON.parse(aiQuery);
         console.log(jsonQuery);
 
-        // if (!isSelectQuery(sqlQuery)) {
-        //     return res.status(200).json({
-        //         success: true,
-        //         message: "Invalid query. Please provide a valid SELECT query. You cant update insert or delete data"
-        //     });
-
-
-        // Execute the query with parameters if provided
-        let databaseResponse = null;
-        if (queryFunction) {
-            try {
-                databaseResponse = await queryFunction(jsonQuery || []);
-            } catch (dbError) {
-                console.error("Database Error:", dbError);
-                return res.status(200).json({
-                    success: false,
-                    message: "Database error",
-                    error: dbError.message,
-                    query: sqlQuery
-                });
-            }
+        // Handle login vs data requests
+        if (jsonQuery.message === "Login query generated") {
+            const dbResponse = await queryFunction(jsonQuery);
+            const enhancedResponse = await dbResponseEnhancedByGemini(dbResponse, query, res, loginInfo);
+            return res.status(200).json({
+                success: true,
+                query: jsonQuery,
+                data: enhancedResponse
+            });
         }
 
-        // Debugging logs
-        console.log('User Request:', query);
-        //console.log('Parameters:', params);
-        console.log("Generated Query:", jsonQuery);
-        console.log("Database Response:", databaseResponse);
-
-        const enhancedResponse = await dbResponseEnhancedByGemini(databaseResponse, query);
-
-        // Return response
         return res.status(200).json({
-            success: true,
-            query: jsonQuery,
-            data: enhancedResponse
+            success: false,
+            data: { html: `${jsonQuery.message} Please login to access this feature.` }
         });
 
     } catch (error) {
         console.error("Error:", error);
         return res.status(500).json({
             success: false,
-            message: "An error occurred while processing your request.",
+            message: "Server error",
             error: error.message
         });
     }
 };
 
-app.post("/", sendingTableDataToGemini);
+app.post("/", handleDatabaseQuery);
 
-app.listen(port, () => {
-    console.log(`App is listening on port: ${port}`);
-});
+app.listen(port, () => console.log(`✅ Server running on port ${port}`));
